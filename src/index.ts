@@ -1,7 +1,38 @@
-import { Client, GatewayIntentBits, Events } from 'discord.js';
+import { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder } from 'discord.js';
 import mongoose from 'mongoose';
 import 'dotenv/config';
-import { Attendance } from './models/attendance'; // Ensure this file exists in src/models/
+import { Attendance } from './models/Attendance'; // Ensure this file exists in src/models/
+
+// Commands Definition
+const commands = [
+    new SlashCommandBuilder()
+        .setName('in')
+        .setDescription('Clock in to start your attendance session'),
+    new SlashCommandBuilder()
+        .setName('out')
+        .setDescription('Clock out to end your attendance session'),
+].map(command => command.toJSON());
+
+const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN as string);
+
+const registerCommands = async () => {
+    try {
+        console.log('Started refreshing application (/) commands.');
+        
+        if (!process.env.CLIENT_ID) {
+            throw new Error('CLIENT_ID is missing from .env file');
+        }
+
+        await rest.put(
+            Routes.applicationCommands(process.env.CLIENT_ID),
+            { body: commands },
+        );
+
+        console.log('Successfully reloaded application (/) commands.');
+    } catch (error) {
+        console.error('Error refreshing commands:', error);
+    }
+};
 
 // Initialize the Discord Client
 const client = new Client({
@@ -26,69 +57,70 @@ const connectDB = async () => {
 };
 
 // Event: When the bot is online
-client.once(Events.ClientReady, (c) => {
+client.once(Events.ClientReady, async (c) => {
     console.log(`🚀 Ready! Logged in as ${c.user.tag}`);
-    connectDB();
+    await connectDB();
+    await registerCommands();
 });
 
-// Listen for Messages
-client.on(Events.MessageCreate, async (message) => {
-    if (message.author.bot) return;
+// Listen for Interactions
+client.on(Events.InteractionCreate, async (interaction) => {
+    if (!interaction.isChatInputCommand()) return;
 
-    const command = message.content.toLowerCase();
+    const { commandName } = interaction;
 
     // --- CLOCK IN COMMAND ---
-    if (command === '!in') {
+    if (commandName === 'in') {
         try {
             const activeSession = await Attendance.findOne({ 
-                userId: message.author.id, 
+                userId: interaction.user.id, 
                 status: 'IN' 
             });
 
             if (activeSession) {
-                return message.reply("⚠️ You're already clocked in!");
+                return interaction.reply({ content: "⚠️ You're already clocked in!", ephemeral: true });
             }
 
             // 2. Ensure we are in a server (guild)
-            if (!message.guildId) {
-                return message.reply("⚠️ You can only use this command inside a server!");
+            if (!interaction.guildId) {
+                return interaction.reply({ content: "⚠️ You can only use this command inside a server!", ephemeral: true });
             }
 
             // 3. Create a new record
             await Attendance.create({
-                userId: message.author.id,
-                guildId: message.guildId, // TypeScript is happy now because of the check above
+                userId: interaction.user.id,
+                guildId: interaction.guildId,
                 startTime: new Date(),
                 status: 'IN'
             });
 
-            await message.reply(`✅ **Clocked IN** at ${new Date().toLocaleTimeString()}`);
+            await interaction.reply(`✅ **Clocked IN** at ${new Date().toLocaleTimeString()}`);
         } catch (err) {
             console.error(err);
-            await message.reply("❌ Error saving to database.");
+            await interaction.reply({ content: "❌ Error saving to database.", ephemeral: true });
         }
     }
 
     // --- CLOCK OUT COMMAND ---
-    if (command === '!out') {
+    if (commandName === 'out') {
         try {
             const activeSession = await Attendance.findOne({ 
-                userId: message.author.id, 
+                userId: interaction.user.id, 
                 status: 'IN' 
             });
 
             if (!activeSession) {
-                return message.reply("⚠️ You aren't clocked in yet! Type `!in` first.");
+                return interaction.reply({ content: "⚠️ You aren't clocked in yet! Type `/in` first.", ephemeral: true });
             }
 
             activeSession.endTime = new Date();
             activeSession.status = 'OUT';
             await activeSession.save();
 
-            await message.reply(`👋 **Clocked OUT** at ${new Date().toLocaleTimeString()}`);
+            await interaction.reply(`👋 **Clocked OUT** at ${new Date().toLocaleTimeString()}`);
         } catch (err) {
             console.error(err);
-            await message.reply("❌ Error updating database.");
+            await interaction.reply({ content: "❌ Error updating database.", ephemeral: true });
         }
     }
 });
