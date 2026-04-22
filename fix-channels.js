@@ -1,64 +1,57 @@
-const { Client, GatewayIntentBits, ChannelType } = require('discord.js');
-const mongoose = require('mongoose');
-require('dotenv/config');
-
-const guildConfigSchema = new mongoose.Schema({
-    guildId: { type: String, required: true, unique: true },
-    clockInChannelId: { type: String },
-    clockOutChannelId: { type: String },
-    breakChannelId: { type: String },
-    reportsChannelId: { type: String }
-});
-
-const GuildConfig = mongoose.model('GuildConfigPatch', guildConfigSchema, 'guildconfigs');
-
-const client = new Client({ intents: [GatewayIntentBits.Guilds] });
-
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+const discord_js_1 = require("discord.js");
+const mongoose_1 = __importDefault(require("mongoose"));
+require("dotenv/config");
+const GuildConfig_1 = require("./src/models/GuildConfig");
+const client = new discord_js_1.Client({ intents: [discord_js_1.GatewayIntentBits.Guilds] });
 client.once('ready', async () => {
     console.log('Connected to Discord');
     try {
-        await mongoose.connect(process.env.MONGO_URI);
+        await mongoose_1.default.connect(process.env.MONGO_URI);
         console.log('Connected to DB');
-
         for (const guild of client.guilds.cache.values()) {
             try {
                 console.log(`Processing guild: ${guild.name}`);
-                let config = await GuildConfig.findOne({ guildId: guild.id });
-                if (!config) continue;
-
+                let config = await GuildConfig_1.GuildConfig.findOne({ guildId: guild.id });
+                if (!config)
+                    continue;
                 if (!config.reportsChannelId) {
-                    let category = guild.channels.cache.find(c => c.type === ChannelType.GuildCategory && c.name === '📅 Attendance');
+                    let category = guild.channels.cache.find(c => c.type === discord_js_1.ChannelType.GuildCategory && c.name === '📅 Attendance');
                     if (!category) {
                         console.log('No attendance category found for', guild.name);
                         continue;
                     }
-
-                    let reportsChannel = guild.channels.cache.find(c => c.parentId === category.id && c.name === 'reports');
-                    
+                    let reportsChannel = guild.channels.cache.find(c => c.parentId === category?.id && c.name === 'reports');
                     if (!reportsChannel) {
                         reportsChannel = await guild.channels.create({
                             name: 'reports',
-                            type: ChannelType.GuildText,
+                            type: discord_js_1.ChannelType.GuildText,
                             parent: category.id
                         });
                         console.log('Created reports channel');
                     }
-
                     config.reportsChannelId = reportsChannel.id;
                     await config.save();
                     console.log('Saved to DB');
-                } else {
+                }
+                else {
                     console.log('Reports channel already configured.');
                 }
-            } catch (e) {
+            }
+            catch (e) {
                 console.error(e);
             }
         }
         console.log('Done!');
-    } catch(err) {
+    }
+    catch (err) {
         console.error(err);
     }
     process.exit(0);
 });
-
 client.login(process.env.DISCORD_TOKEN);
+//# sourceMappingURL=fix-channels.js.map
