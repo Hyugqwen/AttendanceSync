@@ -29,7 +29,7 @@ const connectDB = async () => {
         console.error('❌ MongoDB Connection Error:', err);
     }
 };
-client.once('ready', async () => {
+client.once(discord_js_1.Events.ClientReady, async () => {
     console.log(`🚀 Ready! Logged in as ${client.user?.tag}`);
     await connectDB();
     await (0, commandRegister_1.registerCommands)();

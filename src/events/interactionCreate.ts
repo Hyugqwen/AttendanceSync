@@ -11,7 +11,7 @@ export function setupInteractionCreateEvent(client: Client) {
         if (!guildId) return;
 
         if (commandName === 'report') {
-            await interaction.deferReply({ flags: ['Ephemeral'] as any });
+            await interaction.deferReply({ ephemeral: true });
             try {
                 const timeframe = interaction.options.getString('timeframe');
                 const now = new Date();
@@ -82,10 +82,10 @@ export function setupInteractionCreateEvent(client: Client) {
 
         if (commandName === 'force-out') {
             const targetUser = interaction.options.getUser('user');
-            if (!targetUser) return interaction.reply({ content: "⚠️ User not provided.", flags: ['Ephemeral'] as any });
+            if (!targetUser) return interaction.reply({ content: "⚠️ User not provided.", ephemeral: true });
             
             const result = await handleClockOut(targetUser.id);
-            return interaction.reply({ content: result.message, flags: !result.success ? ['Ephemeral'] as any : undefined });
+            return interaction.reply({ content: result.message, ephemeral: !result.success });
         }
 
         if (commandName === 'adjust-time') {
@@ -93,11 +93,11 @@ export function setupInteractionCreateEvent(client: Client) {
             const action = interaction.options.getString('action');
             const timeStr = interaction.options.getString('time') || '';
             
-            if (!targetUser || !action) return interaction.reply({ content: "⚠️ Missing parameters.", flags: ['Ephemeral'] as any });
+            if (!targetUser || !action) return interaction.reply({ content: "⚠️ Missing parameters.", ephemeral: true });
             
             const match = timeStr.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)?$/i);
             if (!match) {
-                return interaction.reply({ content: "⚠️ Invalid time format. Please use HH:MM AM/PM (e.g., 09:00 AM).", flags: ['Ephemeral'] as any });
+                return interaction.reply({ content: "⚠️ Invalid time format. Please use HH:MM AM/PM (e.g., 09:00 AM).", ephemeral: true });
             }
             
             let hours = parseInt(match[1] as string);
@@ -131,22 +131,22 @@ export function setupInteractionCreateEvent(client: Client) {
                     session.startTime = adjustDate;
                 }
                 await session.save();
-                return interaction.reply({ content: `✅ Adjusted <@${targetUser.id}>'s Clock In time to **${adjustDate.toLocaleTimeString()}**.`, flags: ['Ephemeral'] as any });
+                return interaction.reply({ content: `✅ Adjusted <@${targetUser.id}>'s Clock In time to **${adjustDate.toLocaleTimeString()}**.`, ephemeral: true });
             } else if (action === 'out') {
                 if (!session) {
-                    return interaction.reply({ content: "⚠️ Cannot set a Clock Out time because the user hasn't clocked in today.", flags: ['Ephemeral'] as any });
+                    return interaction.reply({ content: "⚠️ Cannot set a Clock Out time because the user hasn't clocked in today.", ephemeral: true });
                 }
                 session.endTime = adjustDate;
                 session.status = 'OUT';
                 await session.save();
-                return interaction.reply({ content: `✅ Adjusted <@${targetUser.id}>'s Clock Out time to **${adjustDate.toLocaleTimeString()}**.`, flags: ['Ephemeral'] as any });
+                return interaction.reply({ content: `✅ Adjusted <@${targetUser.id}>'s Clock Out time to **${adjustDate.toLocaleTimeString()}**.`, ephemeral: true });
             }
         }
 
         if (['in', 'out', 'break', 'continue'].includes(commandName)) {
             const guildConfig = await GuildConfig.findOne({ guildId });
             if (!guildConfig) {
-                return interaction.reply({ content: "⚠️ An admin must use `/setchannel` before attendance can be recorded.", flags: ['Ephemeral'] as any });
+                return interaction.reply({ content: "⚠️ An admin must use `/setchannel` before attendance can be recorded.", ephemeral: true });
             }
 
             let requiredChannelId;
@@ -155,11 +155,11 @@ export function setupInteractionCreateEvent(client: Client) {
             else requiredChannelId = guildConfig.breakChannelId;
 
             if (!requiredChannelId) {
-                return interaction.reply({ content: `⚠️ This server hasn't configured a channel for this action yet. Ask an admin to use \`/setchannel\`.`, flags: ['Ephemeral'] as any });
+                return interaction.reply({ content: `⚠️ This server hasn't configured a channel for this action yet. Ask an admin to use \`/setchannel\`.`, ephemeral: true });
             }
 
             if (interaction.channelId !== requiredChannelId) {
-                return interaction.reply({ content: `⚠️ You must use this command in <#${requiredChannelId}>.`, flags: ['Ephemeral'] as any });
+                return interaction.reply({ content: `⚠️ You must use this command in <#${requiredChannelId}>.`, ephemeral: true });
             }
 
             let result;
@@ -169,7 +169,7 @@ export function setupInteractionCreateEvent(client: Client) {
             else if (commandName === 'continue') result = await handleBreakEnd(user.id);
             
             if (result) {
-                await interaction.reply({ content: result.message, flags: !result.success ? ['Ephemeral'] as any : undefined });
+                await interaction.reply({ content: result.message, ephemeral: !result.success });
             }
         }
     });
