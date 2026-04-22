@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits } from 'discord.js';
+import { Client, GatewayIntentBits, Events } from 'discord.js';
 import mongoose from 'mongoose';
 import 'dotenv/config';
 import { registerCommands } from './commands/commandRegister';
@@ -25,7 +25,7 @@ const connectDB = async () => {
     }
 };
 
-client.once('ready', async () => {
+client.once(Events.ClientReady, async () => {
     console.log(`🚀 Ready! Logged in as ${client.user?.tag}`);
     await connectDB();
     await registerCommands();
