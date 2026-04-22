@@ -30,14 +30,42 @@ const commands = [
         .setDescription('Generate an attendance report (CSV)')
         .addStringOption(option =>
             option.setName('timeframe')
-                .setDescription('The timeframe for the report')
+                .setDescription('Which timeframe to generate a report for')
                 .setRequired(true)
                 .addChoices(
                     { name: 'Daily', value: 'daily' },
                     { name: 'Weekly', value: 'weekly' },
                     { name: 'Monthly', value: 'monthly' }
                 ))
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+    new SlashCommandBuilder()
+        .setName('force-out')
+        .setDescription('Force a user to clock out')
+        .addUserOption(option => 
+            option.setName('user')
+                .setDescription('The user to clock out')
+                .setRequired(true))
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+    new SlashCommandBuilder()
+        .setName('adjust-time')
+        .setDescription('Adjust a timestamp for a user today')
+        .addUserOption(option => 
+            option.setName('user')
+                .setDescription('The user to adjust')
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('action')
+                .setDescription('Which action to adjust')
+                .setRequired(true)
+                .addChoices(
+                    { name: 'Clock In', value: 'in' },
+                    { name: 'Clock Out', value: 'out' }
+                ))
+        .addStringOption(option =>
+            option.setName('time')
+                .setDescription('Time (e.g. 09:00 AM)')
+                .setRequired(true))
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 ].map(command => command.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN as string);
@@ -190,16 +218,108 @@ async function handleBreakEnd(userId: string): Promise<{ success: boolean, messa
     }
 }
 
-client.once(Events.ClientReady, async (c) => {
-    console.log(`🚀 Ready! Logged in as ${c.user.tag}`);
+let lastDigestDate = -1;
+let lastLateAlertDate = -1;
+
+client.once('ready', async () => {
+    console.log(`🚀 Ready! Logged in as ${client.user?.tag}`);
     await connectDB();
     await registerCommands();
-
-    let lastDigestDate = -1;
 
     setInterval(async () => {
         try {
             const now = new Date();
+
+            // --- STATUS DASHBOARD (Every Minute) ---
+            const allActiveSessions = await Attendance.find({ status: { $in: ['IN', 'BREAK'] } });
+            const allGuildConfigs = await GuildConfig.find({ dashboardChannelId: { $ne: null } });
+            
+            for (const config of allGuildConfigs) {
+                if (!config.dashboardChannelId) continue;
+                const guildId = config.guildId;
+                const guildSessions = allActiveSessions.filter(s => s.guildId === guildId);
+                
+                try {
+                    const channel = await client.channels.fetch(config.dashboardChannelId) as any;
+                    if (channel) {
+                        let msgText = `🟢 **Live Attendance Dashboard** 🟢\n*Last Updated: ${now.toLocaleTimeString()}*\n\n`;
+                        
+                        const clockedIn = guildSessions.filter(s => s.status === 'IN');
+                        const onBreak = guildSessions.filter(s => s.status === 'BREAK');
+                        
+                        msgText += `**Clocked In (${clockedIn.length}):**\n`;
+                        if (clockedIn.length === 0) msgText += `- Nobody\n`;
+                        for (const s of clockedIn) {
+                            const grossMs = now.getTime() - s.startTime.getTime();
+                            const hrs = Math.floor(grossMs / (1000 * 60 * 60));
+                            const mins = Math.floor((grossMs % (1000 * 60 * 60)) / (1000 * 60));
+                            msgText += `- <@${s.userId}> (Since ${s.startTime.toLocaleTimeString()}) - ${hrs}h ${mins}m\n`;
+                        }
+                        
+                        msgText += `\n**On Break (${onBreak.length}):**\n`;
+                        if (onBreak.length === 0) msgText += `- Nobody\n`;
+                        for (const s of onBreak) {
+                            const lastBreak = s.breaks[s.breaks.length - 1];
+                            const breakStartStr = lastBreak ? lastBreak.startTime.toLocaleTimeString() : 'Unknown';
+                            msgText += `- <@${s.userId}> (Since ${breakStartStr})\n`;
+                        }
+                        
+                        if (config.dashboardMessageId) {
+                            try {
+                                const msg = await channel.messages.fetch(config.dashboardMessageId);
+                                await msg.edit(msgText);
+                            } catch(e) {
+                                const newMsg = await channel.send(msgText);
+                                config.dashboardMessageId = newMsg.id;
+                                await config.save();
+                            }
+                        } else {
+                            const newMsg = await channel.send(msgText);
+                            config.dashboardMessageId = newMsg.id;
+                            await config.save();
+                        }
+                    }
+                } catch(e) {}
+            }
+
+            // --- LATE NOTIFICATIONS (10:00 AM) ---
+            if (now.getHours() === 10 && now.getMinutes() === 0 && lastLateAlertDate !== now.getDate()) {
+                lastLateAlertDate = now.getDate();
+                const configsWithAlerts = await GuildConfig.find({ lateAlertsChannelId: { $ne: null } });
+                const startOfDay = new Date();
+                startOfDay.setHours(0,0,0,0);
+                
+                for (const config of configsWithAlerts) {
+                    try {
+                        const guild = await client.guilds.fetch(config.guildId as string);
+                        if (!guild) continue;
+                        
+                        await guild.members.fetch();
+                        const allMembers = guild.members.cache.filter(m => !m.user.bot);
+                        
+                        const todaysRecords = await Attendance.find({ 
+                            guildId: config.guildId, 
+                            startTime: { $gte: startOfDay }
+                        });
+                        
+                        const clockedInUserIds = new Set(todaysRecords.map(r => r.userId));
+                        const missingMembers = allMembers.filter(m => !clockedInUserIds.has(m.id));
+                        
+                        if (missingMembers.size > 0 && config.lateAlertsChannelId) {
+                            const channel = await client.channels.fetch(config.lateAlertsChannelId) as any;
+                            if (channel) {
+                                let alertText = `⚠️ **Late Alert (${now.toLocaleDateString()})** ⚠️\nThe following members have not clocked in yet today:\n`;
+                                for (const member of missingMembers.values()) {
+                                    alertText += `- <@${member.id}>\n`;
+                                }
+                                await channel.send(alertText);
+                            }
+                        }
+                    } catch(e) {
+                        console.error("Error in late notification:", e);
+                    }
+                }
+            }
 
             // --- DAILY DIGEST LOGIC ---
             if (now.getHours() === 18 && now.getMinutes() === 0 && lastDigestDate !== now.getDate()) {
@@ -323,13 +443,33 @@ client.on(Events.GuildCreate, async (guild) => {
             parent: category.id
         });
 
+        const dashboardChannel = await guild.channels.create({
+            name: 'status-dashboard',
+            type: ChannelType.GuildText,
+            parent: category.id
+        });
+
+        const lateAlertsChannel = await guild.channels.create({
+            name: 'late-alerts',
+            type: ChannelType.GuildText,
+            parent: category.id,
+            permissionOverwrites: [
+                {
+                    id: guild.roles.everyone.id,
+                    deny: [PermissionFlagsBits.ViewChannel],
+                }
+            ]
+        });
+
         await GuildConfig.findOneAndUpdate(
             { guildId: guild.id },
             { 
                 clockInChannelId: clockInChannel.id,
                 clockOutChannelId: clockOutChannel.id,
                 breakChannelId: breaksChannel.id,
-                reportsChannelId: reportsChannel.id
+                reportsChannelId: reportsChannel.id,
+                dashboardChannelId: dashboardChannel.id,
+                lateAlertsChannelId: lateAlertsChannel.id
             },
             { upsert: true, returnDocument: 'after' }
         );
@@ -416,6 +556,69 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
     }
 
+    if (commandName === 'force-out') {
+        const targetUser = interaction.options.getUser('user');
+        if (!targetUser) return interaction.reply({ content: "⚠️ User not provided.", flags: ['Ephemeral'] });
+        
+        const result = await handleClockOut(targetUser.id);
+        return interaction.reply({ content: result.message, flags: !result.success ? ['Ephemeral'] : undefined });
+    }
+
+    if (commandName === 'adjust-time') {
+        const targetUser = interaction.options.getUser('user');
+        const action = interaction.options.getString('action');
+        const timeStr = interaction.options.getString('time') || '';
+        
+        if (!targetUser || !action) return interaction.reply({ content: "⚠️ Missing parameters.", flags: ['Ephemeral'] });
+        
+        const match = timeStr.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)?$/i);
+        if (!match) {
+            return interaction.reply({ content: "⚠️ Invalid time format. Please use HH:MM AM/PM (e.g., 09:00 AM).", flags: ['Ephemeral'] });
+        }
+        
+        let hours = parseInt(match[1] as string);
+        const mins = parseInt(match[2] as string);
+        const modifier = match[3] ? match[3].toUpperCase() : null;
+        
+        if (modifier === 'PM' && hours < 12) hours += 12;
+        if (modifier === 'AM' && hours === 12) hours = 0;
+        
+        const adjustDate = new Date();
+        adjustDate.setHours(hours, mins, 0, 0);
+        
+        const startOfDay = new Date();
+        startOfDay.setHours(0,0,0,0);
+        
+        let session = await Attendance.findOne({
+            userId: targetUser.id,
+            guildId,
+            startTime: { $gte: startOfDay }
+        });
+        
+        if (action === 'in') {
+            if (!session) {
+                session = new Attendance({
+                    userId: targetUser.id,
+                    guildId,
+                    status: 'IN',
+                    startTime: adjustDate
+                });
+            } else {
+                session.startTime = adjustDate;
+            }
+            await session.save();
+            return interaction.reply({ content: `✅ Adjusted <@${targetUser.id}>'s Clock In time to **${adjustDate.toLocaleTimeString()}**.`, flags: ['Ephemeral'] });
+        } else if (action === 'out') {
+            if (!session) {
+                return interaction.reply({ content: "⚠️ Cannot set a Clock Out time because the user hasn't clocked in today.", flags: ['Ephemeral'] });
+            }
+            session.endTime = adjustDate;
+            session.status = 'OUT';
+            await session.save();
+            return interaction.reply({ content: `✅ Adjusted <@${targetUser.id}>'s Clock Out time to **${adjustDate.toLocaleTimeString()}**.`, flags: ['Ephemeral'] });
+        }
+    }
+
     if (['in', 'out', 'break', 'continue'].includes(commandName)) {
         const guildConfig = await GuildConfig.findOne({ guildId });
         if (!guildConfig) {
@@ -452,17 +655,27 @@ client.on(Events.MessageCreate, async (message) => {
     if (!message.guildId) return;
 
     const content = message.content.trim().toLowerCase();
-    const validKeywords = ['time in', 'log off', 'break', 'continue'];
-    if (!validKeywords.includes(content)) return;
+    
+    const keywordMap: { [key: string]: string } = {
+        'time in': 'in', 'timing in': 'in', 'clock in': 'in', 'clocking in': 'in', 'log in': 'in', 'logging in': 'in',
+        'log off': 'out', 'logging off': 'out', 'clock out': 'out', 'clocking out': 'out', 'time out': 'out', 'timing out': 'out',
+        'taking a break': 'break', 'on break': 'break', 'break': 'break', 
+        'continue': 'continue', 'continuing': 'continue', 'back from break': 'continue', 'back to work': 'continue'
+    };
+
+    const matchedPhrase = Object.keys(keywordMap).find(kw => content.includes(kw));
+    if (!matchedPhrase) return;
+
+    const action = keywordMap[matchedPhrase];
 
     const guildConfig = await GuildConfig.findOne({ guildId: message.guildId });
     if (!guildConfig) {
-        return message.reply("⚠️ An admin must use `/setchannel` before attendance can be recorded.");
+        return message.reply("⚠️ An admin must configure the bot before attendance can be recorded.");
     }
 
     let requiredChannelId;
-    if (content === 'time in') requiredChannelId = guildConfig.clockInChannelId;
-    else if (content === 'log off') requiredChannelId = guildConfig.clockOutChannelId;
+    if (action === 'in') requiredChannelId = guildConfig.clockInChannelId;
+    else if (action === 'out') requiredChannelId = guildConfig.clockOutChannelId;
     else requiredChannelId = guildConfig.breakChannelId;
 
     if (!requiredChannelId) {
@@ -474,10 +687,10 @@ client.on(Events.MessageCreate, async (message) => {
     }
 
     let result;
-    if (content === 'time in') result = await handleClockIn(message.author.id, message.guildId);
-    else if (content === 'log off') result = await handleClockOut(message.author.id);
-    else if (content === 'break') result = await handleBreakStart(message.author.id);
-    else if (content === 'continue') result = await handleBreakEnd(message.author.id);
+    if (action === 'in') result = await handleClockIn(message.author.id, message.guildId);
+    else if (action === 'out') result = await handleClockOut(message.author.id);
+    else if (action === 'break') result = await handleBreakStart(message.author.id);
+    else if (action === 'continue') result = await handleBreakEnd(message.author.id);
 
     if (result) await message.reply(result.message);
 });

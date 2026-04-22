@@ -6,7 +6,10 @@ const guildConfigSchema = new Schema({
     clockInChannelId: { type: String },
     clockOutChannelId: { type: String },
     breakChannelId: { type: String },
-    reportsChannelId: { type: String }
+    reportsChannelId: { type: String },
+    dashboardChannelId: { type: String },
+    dashboardMessageId: { type: String },
+    lateAlertsChannelId: { type: String }
 });
 
 export const GuildConfig = model('GuildConfig', guildConfigSchema);
