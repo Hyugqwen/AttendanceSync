@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 import 'dotenv/config';
 import { registerCommands } from './commands/commandRegister';
 import { startBackgroundJobs } from './jobs/backgroundJobs';
-import { setupGuildCreateEvent } from './events/guildCreate';
+import { setupGuildCreateEvent, setupGuildChannels } from './events/guildCreate';
 import { setupInteractionCreateEvent } from './events/interactionCreate';
 import { setupMessageCreateEvent } from './events/messageCreate';
 
@@ -29,6 +29,15 @@ client.once(Events.ClientReady, async () => {
     console.log(`🚀 Ready! Logged in as ${client.user?.tag}`);
     await connectDB();
     await registerCommands();
+    
+    // Auto-setup channels for any missing guilds
+    console.log('🔍 Checking for missing channels in all guilds...');
+    const guilds = await client.guilds.fetch();
+    for (const [id, oauthGuild] of guilds) {
+        const guild = await oauthGuild.fetch();
+        await setupGuildChannels(guild);
+    }
+
     startBackgroundJobs(client);
 });
 

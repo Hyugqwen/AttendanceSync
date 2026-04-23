@@ -1,4 +1,4 @@
-import { Attendance } from '../models/Attendance';
+import { Attendance, IAttendance, IBreak } from '../models/Attendance';
 import { formatDuration } from '../utils/formatters';
 
 export async function handleClockIn(userId: string, guildId: string): Promise<{ success: boolean, message: string }> {
@@ -34,7 +34,7 @@ export async function handleClockOut(userId: string): Promise<{ success: boolean
 
         const totalGrossMs = now.getTime() - activeSession.startTime.getTime();
         let totalBreakMs = 0;
-        activeSession.breaks.forEach((b: any) => {
+        activeSession.breaks.forEach((b: IBreak) => {
             if (!b.type) {
                 b.type = 'OTHER';
             }
@@ -66,13 +66,13 @@ export async function handleBreakStart(userId: string): Promise<{ success: boole
 
         const now = new Date();
         const hour = now.getHours();
-        let breakType = 'OTHER';
+        let breakType: IBreak['type'] = 'OTHER';
         if (hour >= 8 && hour < 12) breakType = 'MORNING';
         else if (hour >= 12 && hour < 13) breakType = 'LUNCH';
         else if (hour >= 13 && hour < 17) breakType = 'AFTERNOON';
 
         if (breakType !== 'OTHER') {
-            const alreadyTook = activeSession.breaks.some((b: any) => b.type === breakType);
+            const alreadyTook = activeSession.breaks.some((b: IBreak) => b.type === breakType);
             if (alreadyTook) {
                 return { success: false, message: `⚠️ You already took your ${breakType.toLowerCase()} break!` };
             }
@@ -100,7 +100,8 @@ export async function handleBreakEnd(userId: string): Promise<{ success: boolean
             lastBreak.endTime = new Date();
         }
         
-        activeSession.breaks.forEach((b: any) => {
+        
+        activeSession.breaks.forEach((b: IBreak) => {
             if (!b.type) b.type = 'OTHER';
         });
 

@@ -1,7 +1,17 @@
-import { Schema, model } from 'mongoose';
+import { Schema, model, Document } from 'mongoose';
 
-// This defines the configuration for each Discord server (guild)
-const guildConfigSchema = new Schema({
+export interface IGuildConfig extends Document {
+    guildId: string;
+    clockInChannelId?: string;
+    clockOutChannelId?: string;
+    breakChannelId?: string;
+    reportsChannelId?: string;
+    dashboardChannelId?: string;
+    dashboardMessageId?: string;
+    lateAlertsChannelId?: string;
+}
+
+const guildConfigSchema = new Schema<IGuildConfig>({
     guildId: { type: String, required: true, unique: true },
     clockInChannelId: { type: String },
     clockOutChannelId: { type: String },
@@ -12,4 +22,4 @@ const guildConfigSchema = new Schema({
     lateAlertsChannelId: { type: String }
 });
 
-export const GuildConfig = model('GuildConfig', guildConfigSchema);
+export const GuildConfig = model<IGuildConfig>('GuildConfig', guildConfigSchema);

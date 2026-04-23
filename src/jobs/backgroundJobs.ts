@@ -1,6 +1,6 @@
-import { Client } from 'discord.js';
-import { Attendance } from '../models/Attendance';
-import { GuildConfig } from '../models/GuildConfig';
+import { Client, TextChannel } from 'discord.js';
+import { Attendance, IAttendance, IBreak } from '../models/Attendance';
+import { GuildConfig, IGuildConfig } from '../models/GuildConfig';
 
 let lastDigestDate = -1;
 let lastLateAlertDate = -1;
@@ -17,15 +17,15 @@ export function startBackgroundJobs(client: Client) {
             for (const config of allGuildConfigs) {
                 if (!config.dashboardChannelId) continue;
                 const guildId = config.guildId;
-                const guildSessions = allActiveSessions.filter(s => s.guildId === guildId);
+                const guildSessions = allActiveSessions.filter((s: IAttendance) => s.guildId === guildId);
                 
                 try {
-                    const channel = await client.channels.fetch(config.dashboardChannelId) as any;
+                    const channel = await client.channels.fetch(config.dashboardChannelId) as TextChannel;
                     if (channel) {
                         let msgText = `🟢 **Live Attendance Dashboard** 🟢\n*Last Updated: ${now.toLocaleTimeString()}*\n\n`;
                         
-                        const clockedIn = guildSessions.filter(s => s.status === 'IN');
-                        const onBreak = guildSessions.filter(s => s.status === 'BREAK');
+                        const clockedIn = guildSessions.filter((s: IAttendance) => s.status === 'IN');
+                        const onBreak = guildSessions.filter((s: IAttendance) => s.status === 'BREAK');
                         
                         msgText += `**Clocked In (${clockedIn.length}):**\n`;
                         if (clockedIn.length === 0) msgText += `- Nobody\n`;
@@ -86,7 +86,7 @@ export function startBackgroundJobs(client: Client) {
                         const missingMembers = allMembers.filter(m => !clockedInUserIds.has(m.id));
                         
                         if (missingMembers.size > 0 && config.lateAlertsChannelId) {
-                            const channel = await client.channels.fetch(config.lateAlertsChannelId) as any;
+                            const channel = await client.channels.fetch(config.lateAlertsChannelId) as TextChannel;
                             if (channel) {
                                 let alertText = `⚠️ **Late Alert (${now.toLocaleDateString()})** ⚠️\nThe following members have not clocked in yet today:\n`;
                                 for (const member of missingMembers.values()) {
@@ -106,7 +106,7 @@ export function startBackgroundJobs(client: Client) {
                 lastDigestDate = now.getDate();
                 const activeSessions = await Attendance.find({ status: { $in: ['IN', 'BREAK'] } });
                 
-                const guildMap: { [key: string]: any[] } = {};
+                const guildMap: { [key: string]: IAttendance[] } = {};
                 for (const session of activeSessions) {
                     const gid = session.guildId as string;
                     if (gid) {
@@ -119,7 +119,7 @@ export function startBackgroundJobs(client: Client) {
                     const guildConfig = await GuildConfig.findOne({ guildId });
                     if (guildConfig && guildConfig.reportsChannelId) {
                         try {
-                            const channel = await client.channels.fetch(guildConfig.reportsChannelId) as any;
+                            const channel = await client.channels.fetch(guildConfig.reportsChannelId) as TextChannel;
                             if (channel) {
                                 let msg = `📊 **End of Day Summary (${now.toLocaleDateString()})**\nThe following users are still clocked in:\n`;
                                 const sessionsForGuild = guildMap[guildId];
@@ -163,14 +163,14 @@ export function startBackgroundJobs(client: Client) {
 
                         if (timeSinceLastReminder >= 10 * 60 * 1000) {
                             lastBreak.lastReminderSentAt = now;
-                            session.breaks.forEach((b: any) => {
+                            session.breaks.forEach((b: IBreak) => {
                                 if (!b.type) b.type = 'OTHER';
                             });
                             await session.save();
                             
                             const guildConfig = await GuildConfig.findOne({ guildId: session.guildId });
                             if (guildConfig && guildConfig.breakChannelId) {
-                                const channel = await client.channels.fetch(guildConfig.breakChannelId) as any;
+                                const channel = await client.channels.fetch(guildConfig.breakChannelId) as TextChannel;
                                 if (channel) {
                                     channel.send(`⚠️ <@${session.userId}>, your break is over! Please use \`/continue\` to resume working.`);
                                 }
