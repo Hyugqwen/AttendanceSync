@@ -1,6 +1,6 @@
 import { Events, Client, AttachmentBuilder } from 'discord.js';
-import { Attendance } from '../models/Attendance';
-import { GuildConfig } from '../models/GuildConfig';
+import { Attendance, IAttendance, IBreak } from '../models/Attendance';
+import { GuildConfig, IGuildConfig } from '../models/GuildConfig';
 import { handleClockIn, handleClockOut, handleBreakStart, handleBreakEnd } from '../core/attendanceLogic';
 
 export function setupInteractionCreateEvent(client: Client) {
@@ -41,7 +41,7 @@ export function setupInteractionCreateEvent(client: Client) {
                     let breaks = 0;
                     
                     if (rec.breaks && Array.isArray(rec.breaks)) {
-                        rec.breaks.forEach((b: any) => {
+                        rec.breaks.forEach((b: IBreak) => {
                             if (b.startTime) {
                                 const bEnd = b.endTime || new Date();
                                 breaks += bEnd.getTime() - b.startTime.getTime();
@@ -144,7 +144,7 @@ export function setupInteractionCreateEvent(client: Client) {
         }
 
         if (['in', 'out', 'break', 'continue'].includes(commandName)) {
-            const guildConfig = await GuildConfig.findOne({ guildId });
+            const guildConfig: IGuildConfig | null = await GuildConfig.findOne({ guildId });
             if (!guildConfig) {
                 return interaction.reply({ content: "⚠️ An admin must use `/setchannel` before attendance can be recorded.", ephemeral: true });
             }
