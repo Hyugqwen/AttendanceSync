@@ -1,15 +1,10 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const mongoose_1 = __importDefault(require("mongoose"));
-const Attendance_1 = require("./src/models/Attendance");
-require("dotenv/config");
+import mongoose from 'mongoose';
+import { Attendance } from './src/models/Attendance';
+import 'dotenv/config';
 async function fix() {
     try {
-        await mongoose_1.default.connect(process.env.MONGO_URI);
-        const sessions = await Attendance_1.Attendance.find({});
+        await mongoose.connect(process.env.MONGO_URI);
+        const sessions = await Attendance.find({});
         for (const session of sessions) {
             let changed = false;
             session.breaks.forEach((b) => {

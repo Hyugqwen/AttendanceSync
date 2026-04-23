@@ -1,0 +1,9 @@
+node_modules
+dist
+.env
+*.log
+.git
+.vscode
+src/**/*.js
+src/**/*.d.ts
+src/**/*.js.map
