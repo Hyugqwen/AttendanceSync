@@ -1,14 +1,15 @@
-import { Client, TextChannel } from 'discord.js';
+import { Client, TextChannel, AttachmentBuilder } from 'discord.js';
 import { Attendance, IAttendance, IBreak } from '../models/Attendance';
 import { GuildConfig, IGuildConfig } from '../models/GuildConfig';
+import { generateAttendanceCSV } from '../utils/csvGenerator';
 
 let lastDigestDate = -1;
 let lastLateAlertDate = -1;
 
 export function startBackgroundJobs(client: Client) {
-    setInterval(async () => {
+    const runJobs = async () => {
+        const now = new Date();
         try {
-            const now = new Date();
 
             // --- STATUS DASHBOARD (Every Minute) ---
             const allActiveSessions = await Attendance.find({ status: { $in: ['IN', 'BREAK'] } });
@@ -47,19 +48,26 @@ export function startBackgroundJobs(client: Client) {
                         if (config.dashboardMessageId) {
                             try {
                                 const msg = await channel.messages.fetch(config.dashboardMessageId);
-                                await msg.edit(msgText);
+                                if (msg.content !== msgText) {
+                                    await msg.edit(msgText);
+                                }
                             } catch(e) {
+                                console.log(`🔄 Dashboard message missing for guild ${config.guildId}, sending new one...`);
+                                // Message might have been deleted, send a new one
                                 const newMsg = await channel.send(msgText);
                                 config.dashboardMessageId = newMsg.id;
                                 await config.save();
                             }
                         } else {
+                            console.log(`🆕 Creating new dashboard for guild ${config.guildId}...`);
                             const newMsg = await channel.send(msgText);
                             config.dashboardMessageId = newMsg.id;
                             await config.save();
                         }
                     }
-                } catch(e) {}
+                } catch(err) {
+                    console.error(`Failed to update dashboard for guild ${config.guildId}:`, err);
+                }
             }
 
             // --- LATE NOTIFICATIONS (10:00 AM) ---
@@ -101,17 +109,25 @@ export function startBackgroundJobs(client: Client) {
                 }
             }
 
-            // --- DAILY DIGEST LOGIC ---
+            // --- DAILY DIGEST LOGIC (6:00 PM) ---
             if (now.getHours() === 18 && now.getMinutes() === 0 && lastDigestDate !== now.getDate()) {
                 lastDigestDate = now.getDate();
-                const activeSessions = await Attendance.find({ status: { $in: ['IN', 'BREAK'] } });
                 
+                const startOfDay = new Date(now);
+                startOfDay.setHours(0,0,0,0);
+                
+                // Fetch ALL records for today
+                const todaysRecords = await Attendance.find({ 
+                    startTime: { $gte: startOfDay }
+                });
+
+                // Group by Guild
                 const guildMap: { [key: string]: IAttendance[] } = {};
-                for (const session of activeSessions) {
-                    const gid = session.guildId as string;
+                for (const record of todaysRecords) {
+                    const gid = record.guildId as string;
                     if (gid) {
                         if (!guildMap[gid]) guildMap[gid] = [];
-                        guildMap[gid]!.push(session);
+                        guildMap[gid]!.push(record);
                     }
                 }
 
@@ -121,19 +137,34 @@ export function startBackgroundJobs(client: Client) {
                         try {
                             const channel = await client.channels.fetch(guildConfig.reportsChannelId) as TextChannel;
                             if (channel) {
-                                let msg = `📊 **End of Day Summary (${now.toLocaleDateString()})**\nThe following users are still clocked in:\n`;
-                                const sessionsForGuild = guildMap[guildId];
-                                if (sessionsForGuild) {
-                                    for (const session of sessionsForGuild) {
+                                const sessionsForGuild = guildMap[guildId] || [];
+                                const stillClockedIn = sessionsForGuild.filter(s => s.status !== 'OUT');
+                                
+                                let msg = `📊 **End of Day Summary (${now.toLocaleDateString()})**\n`;
+                                msg += `Total members clocked in today: **${sessionsForGuild.length}**\n`;
+                                
+                                if (stillClockedIn.length > 0) {
+                                    msg += `\nThe following users are still clocked in:\n`;
+                                    for (const session of stillClockedIn) {
                                         const timeStr = session.startTime.toLocaleTimeString();
                                         const statusStr = session.status === 'BREAK' ? 'Currently on BREAK' : `Started at ${timeStr}`;
                                         msg += `- <@${session.userId}> (${statusStr})\n`;
                                     }
+                                } else {
+                                    msg += `\nAll members have clocked out for the day.`;
                                 }
-                                await channel.send(msg);
+
+                                // Generate CSV
+                                const csvData = await generateAttendanceCSV(sessionsForGuild, client, guildId);
+                                const attachment = new AttachmentBuilder(Buffer.from(csvData), { name: `daily-attendance-${now.toISOString().split('T')[0]}.csv` });
+
+                                await channel.send({ 
+                                    content: msg, 
+                                    files: [attachment] 
+                                });
                             }
                         } catch(e) {
-                            console.error("Error sending daily digest:", e);
+                            console.error(`Error sending daily digest for guild ${guildId}:`, e);
                         }
                     }
                 }
@@ -170,9 +201,13 @@ export function startBackgroundJobs(client: Client) {
                             
                             const guildConfig = await GuildConfig.findOne({ guildId: session.guildId });
                             if (guildConfig && guildConfig.breakChannelId) {
-                                const channel = await client.channels.fetch(guildConfig.breakChannelId) as TextChannel;
-                                if (channel) {
-                                    channel.send(`⚠️ <@${session.userId}>, your break is over! Please use \`/continue\` to resume working.`);
+                                try {
+                                    const channel = await client.channels.fetch(guildConfig.breakChannelId) as TextChannel;
+                                    if (channel) {
+                                        channel.send(`⚠️ <@${session.userId}>, your break is over! Please use \`/continue\` to resume working.`);
+                                    }
+                                } catch (e) {
+                                    console.error(`Error sending break reminder for user ${session.userId}:`, e);
                                 }
                             }
                         }
@@ -180,7 +215,14 @@ export function startBackgroundJobs(client: Client) {
                 }
             }
         } catch (err) {
-            console.error("Reminder loop error:", err);
+            console.error("Critical error in background jobs loop:", err);
+        } finally {
+            // Schedule next run in 60 seconds, ensuring no overlaps
+            setTimeout(runJobs, 60 * 1000);
         }
-    }, 60 * 1000); // Run every minute
+    };
+
+    // Start the first run
+    runJobs();
 }
+

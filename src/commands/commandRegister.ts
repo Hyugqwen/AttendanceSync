@@ -54,8 +54,14 @@ export const commands = [
             option.setName('time')
                 .setDescription('Time (e.g. 09:00 AM)')
                 .setRequired(true))
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+    new SlashCommandBuilder()
+
+        .setName('test-digest')
+        .setDescription('Force a test of the daily digest CSV report')
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
 ].map(command => command.toJSON());
+
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN as string);
 
