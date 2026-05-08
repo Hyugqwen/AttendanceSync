@@ -209,6 +209,24 @@ export function setupInteractionCreateEvent(client: Client) {
                     if (commandName === 'break' && activeSession.status === 'BREAK') {
                         return interaction.reply({ content: "⚠️ You're already on break!", flags: [MessageFlags.Ephemeral] });
                     }
+                    if (commandName === 'break' && activeSession.status === 'IN') {
+                        const now = new Date();
+                        const hour = now.getHours();
+                        let breakType: IBreak['type'] = 'OTHER';
+                        if (hour >= 8 && hour < 12) breakType = 'MORNING';
+                        else if (hour >= 12 && hour < 13) breakType = 'LUNCH';
+                        else if (hour >= 13 && hour < 17) breakType = 'AFTERNOON';
+
+                        if (breakType !== 'OTHER') {
+                            const alreadyTook = activeSession.breaks.some((b: IBreak) => b.type === breakType);
+                            if (alreadyTook) {
+                                return interaction.reply({ 
+                                    content: `⚠️ You already took your ${breakType.toLowerCase()} break!`, 
+                                    flags: [MessageFlags.Ephemeral] 
+                                });
+                            }
+                        }
+                    }
                     if (commandName === 'continue' && activeSession.status === 'IN') {
                         return interaction.reply({ content: "⚠️ You aren't on break!", flags: [MessageFlags.Ephemeral] });
                     }
