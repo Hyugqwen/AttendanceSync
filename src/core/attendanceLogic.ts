@@ -16,10 +16,17 @@ export async function handleClockIn(userId: string, guildId: string): Promise<{ 
     }
 }
 
-export async function handleClockOut(userId: string): Promise<{ success: boolean, message: string }> {
+export async function handleClockOut(userId: string, guildId: string): Promise<{ success: boolean, message: string }> {
     try {
-        const activeSession = await Attendance.findOne({ userId, status: { $in: ['IN', 'BREAK'] } });
+        const uId = userId.trim();
+        const gId = guildId.trim();
+        const activeSession = await Attendance.findOne({ userId: uId, guildId: gId, status: { $in: ['IN', 'BREAK'] } });
+        
         if (!activeSession) {
+            const globalSession = await Attendance.findOne({ userId: uId, status: { $in: ['IN', 'BREAK'] } });
+            if (globalSession) {
+                return { success: false, message: `⚠️ You are clocked in on another server, not here. Please clock out on that server.` };
+            }
             return { success: false, message: "⚠️ You aren't clocked in yet! Type `/in` first." };
         }
         
@@ -35,9 +42,7 @@ export async function handleClockOut(userId: string): Promise<{ success: boolean
         const totalGrossMs = now.getTime() - activeSession.startTime.getTime();
         let totalBreakMs = 0;
         activeSession.breaks.forEach((b: IBreak) => {
-            if (!b.type) {
-                b.type = 'OTHER';
-            }
+            if (!b.type) b.type = 'OTHER';
             if (b.endTime && b.startTime) {
                 totalBreakMs += b.endTime.getTime() - b.startTime.getTime();
             }
@@ -58,9 +63,9 @@ export async function handleClockOut(userId: string): Promise<{ success: boolean
     }
 }
 
-export async function handleBreakStart(userId: string): Promise<{ success: boolean, message: string }> {
+export async function handleBreakStart(userId: string, guildId: string): Promise<{ success: boolean, message: string }> {
     try {
-        const activeSession = await Attendance.findOne({ userId, status: { $in: ['IN', 'BREAK'] } });
+        const activeSession = await Attendance.findOne({ userId, guildId, status: { $in: ['IN', 'BREAK'] } });
         if (!activeSession) return { success: false, message: "⚠️ You aren't clocked in yet!" };
         if (activeSession.status === 'BREAK') return { success: false, message: "⚠️ You're already on break!" };
 
@@ -89,9 +94,9 @@ export async function handleBreakStart(userId: string): Promise<{ success: boole
     }
 }
 
-export async function handleBreakEnd(userId: string): Promise<{ success: boolean, message: string }> {
+export async function handleBreakEnd(userId: string, guildId: string): Promise<{ success: boolean, message: string }> {
     try {
-        const activeSession = await Attendance.findOne({ userId, status: { $in: ['IN', 'BREAK'] } });
+        const activeSession = await Attendance.findOne({ userId, guildId, status: { $in: ['IN', 'BREAK'] } });
         if (!activeSession) return { success: false, message: "⚠️ You aren't clocked in yet!" };
         if (activeSession.status === 'IN') return { success: false, message: "⚠️ You aren't on break!" };
 
