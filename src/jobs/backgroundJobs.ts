@@ -18,6 +18,14 @@ export function startBackgroundJobs(client: Client) {
             for (const config of allGuildConfigs) {
                 if (!config.dashboardChannelId) continue;
                 const guildId = config.guildId;
+                if (!guildId) continue;
+
+                // Check if bot is still in the guild
+                const guild = client.guilds.cache.get(guildId);
+                if (!guild) {
+                    continue;
+                }
+
                 const guildSessions = allActiveSessions.filter((s: IAttendance) => s.guildId === guildId);
                 
                 try {
@@ -65,8 +73,51 @@ export function startBackgroundJobs(client: Client) {
                             await config.save();
                         }
                     }
-                } catch(err) {
-                    console.error(`Failed to update dashboard for guild ${config.guildId}:`, err);
+                } catch(err: any) {
+                    const errorCode = err.code || (err.rawError && err.rawError.code);
+                    if (errorCode === 50001) {
+                        console.warn(`⚠️ Missing access to dashboard channel for guild ${config.guildId}.`);
+                    } else {
+                        console.error(`Failed to update dashboard for guild ${config.guildId}:`, err);
+                    }
+                }
+            }
+
+            // --- AUTO CLOCK OUT (Checks Every Minute) ---
+            const currentTimeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+            const allConfigs = await GuildConfig.find();
+            
+            for (const config of allConfigs) {
+                // Skip if bot is not in guild
+                if (!client.guilds.cache.has(config.guildId)) continue;
+
+                const targetTime = config.autoClockOutTime || "23:59";
+                if (targetTime === currentTimeStr) {
+                    const activeSessions = await Attendance.find({ 
+                        guildId: config.guildId,
+                        status: { $in: ['IN', 'BREAK'] } 
+                    });
+
+                    for (const session of activeSessions) {
+                        session.status = 'OUT';
+                        session.endTime = now;
+                        for (const b of session.breaks) {
+                            if (!b.endTime) b.endTime = now;
+                        }
+                        await session.save();
+                        console.log(`[Auto Clock-Out] User ${session.userId} in guild ${session.guildId}`);
+
+                        if (config.clockOutChannelId) {
+                            try {
+                                const channel = await client.channels.fetch(config.clockOutChannelId) as TextChannel;
+                                if (channel) {
+                                    await channel.send(`🕒 <@${session.userId}> was automatically clocked out at the end of the day.`);
+                                }
+                            } catch (e: any) {
+                                // Silent fail for missing access
+                            }
+                        }
+                    }
                 }
             }
 
@@ -103,8 +154,12 @@ export function startBackgroundJobs(client: Client) {
                                 await channel.send(alertText);
                             }
                         }
-                    } catch(e) {
-                        console.error("Error in late notification:", e);
+                    } catch(e: any) {
+                        if (e.code === 50001) {
+                            console.warn(`⚠️ Missing access for late notifications in guild ${config.guildId}.`);
+                        } else {
+                            console.error("Error in late notification:", e);
+                        }
                     }
                 }
             }
@@ -134,6 +189,9 @@ export function startBackgroundJobs(client: Client) {
                 for (const guildId of Object.keys(guildMap)) {
                     const guildConfig = await GuildConfig.findOne({ guildId });
                     if (guildConfig && guildConfig.reportsChannelId) {
+                        // Check if bot is still in the guild
+                        if (!client.guilds.cache.has(guildId)) continue;
+
                         try {
                             const channel = await client.channels.fetch(guildConfig.reportsChannelId) as TextChannel;
                             if (channel) {
@@ -163,8 +221,12 @@ export function startBackgroundJobs(client: Client) {
                                     files: [attachment] 
                                 });
                             }
-                        } catch(e) {
-                            console.error(`Error sending daily digest for guild ${guildId}:`, e);
+                        } catch(e: any) {
+                            if (e.code === 50001) {
+                                console.warn(`⚠️ Missing access for daily digest in guild ${guildId}.`);
+                            } else {
+                                console.error(`Error sending daily digest for guild ${guildId}:`, e);
+                            }
                         }
                     }
                 }
@@ -206,8 +268,12 @@ export function startBackgroundJobs(client: Client) {
                                     if (channel) {
                                         channel.send(`⚠️ <@${session.userId}>, your break is over! Please use \`/continue\` to resume working.`);
                                     }
-                                } catch (e) {
-                                    console.error(`Error sending break reminder for user ${session.userId}:`, e);
+                                } catch (e: any) {
+                                    if (e.code === 50001) {
+                                        console.warn(`⚠️ Missing access for break reminder to user ${session.userId} in guild ${session.guildId}.`);
+                                    } else {
+                                        console.error(`Error sending break reminder for user ${session.userId}:`, e);
+                                    }
                                 }
                             }
                         }
@@ -225,4 +291,3 @@ export function startBackgroundJobs(client: Client) {
     // Start the first run
     runJobs();
 }
-

@@ -1,6 +1,9 @@
 import { Client, GatewayIntentBits, Events } from 'discord.js';
 import mongoose from 'mongoose';
 import 'dotenv/config';
+import dns from 'dns';
+
+dns.setServers(['8.8.8.8', '1.1.1.1']);
 import { registerCommands } from './commands/commandRegister';
 import { startBackgroundJobs } from './jobs/backgroundJobs';
 import { setupGuildCreateEvent, setupGuildChannels } from './events/guildCreate';
@@ -28,15 +31,20 @@ const connectDB = async () => {
 client.once(Events.ClientReady, async () => {
     console.log(`🚀 Ready! Logged in as ${client.user?.tag}`);
     await connectDB();
-    await registerCommands();
     
-    // Auto-setup channels for any missing guilds
+    // Auto-setup channels and collect guild IDs for command registration
     console.log('🔍 Checking for missing channels in all guilds...');
     const guilds = await client.guilds.fetch();
+    const guildIds: string[] = [];
+
     for (const [id, oauthGuild] of guilds) {
+        guildIds.push(id);
         const guild = await oauthGuild.fetch();
         await setupGuildChannels(guild);
     }
+
+    // Register commands both globally and per-guild for instant updates
+    await registerCommands(guildIds);
 
     startBackgroundJobs(client);
 });

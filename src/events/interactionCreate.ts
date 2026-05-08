@@ -1,4 +1,4 @@
-import { Events, Client, AttachmentBuilder, MessageFlags } from 'discord.js';
+import { Events, Client, AttachmentBuilder, MessageFlags, TextChannel } from 'discord.js';
 import { Attendance, IAttendance, IBreak } from '../models/Attendance';
 import { GuildConfig, IGuildConfig } from '../models/GuildConfig';
 import { handleClockIn, handleClockOut, handleBreakStart, handleBreakEnd } from '../core/attendanceLogic';
@@ -13,6 +13,8 @@ export function setupInteractionCreateEvent(client: Client) {
             console.log(`📥 Received command: /${commandName} from ${user.tag} in channel ${channelId}`);
 
             if (!guildId) return;
+
+            // --- ADMIN COMMANDS ---
 
             if (commandName === 'report') {
                 await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
@@ -33,7 +35,6 @@ export function setupInteractionCreateEvent(client: Client) {
                         return interaction.editReply("⚠️ No attendance records found for this timeframe.");
                     }
 
-                    // Use the shared utility
                     const csvData = await generateAttendanceCSV(records, client, guildId);
                     const attachment = new AttachmentBuilder(Buffer.from(csvData), { name: `attendance-report-${timeframe}.csv` });
                     
@@ -44,13 +45,18 @@ export function setupInteractionCreateEvent(client: Client) {
                 }
             }
 
-
             if (commandName === 'force-out') {
-                await interaction.deferReply();
                 const targetUser = interaction.options.getUser('user');
-                if (!targetUser) return interaction.editReply({ content: "⚠️ User not provided." });
+                if (!targetUser) return interaction.reply({ content: "⚠️ User not provided.", flags: [MessageFlags.Ephemeral] });
                 
-                const result = await handleClockOut(targetUser.id);
+                // Pre-check for force-out
+                const activeSession = await Attendance.findOne({ userId: targetUser.id, guildId, status: { $in: ['IN', 'BREAK'] } });
+                if (!activeSession) {
+                    return interaction.reply({ content: "⚠️ This user is not clocked in on this server.", flags: [MessageFlags.Ephemeral] });
+                }
+
+                await interaction.deferReply();
+                const result = await handleClockOut(targetUser.id, guildId);
                 return interaction.editReply({ content: result.message });
             }
 
@@ -110,13 +116,33 @@ export function setupInteractionCreateEvent(client: Client) {
                 }
             }
 
+            if (commandName === 'set-auto-out') {
+                await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+                const timeStr = interaction.options.getString('time') || '';
+                
+                const match = timeStr.trim().match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+                if (!match) {
+                    return interaction.editReply({ content: "⚠️ Invalid time format. Please use 24h format HH:mm (e.g., 22:00 or 23:59)." });
+                }
+                
+                await GuildConfig.findOneAndUpdate(
+                    { guildId },
+                    { autoClockOutTime: timeStr },
+                    { upsert: true }
+                );
+                
+                return interaction.editReply({ content: `✅ Automatic clock-out time set to **${timeStr}**.` });
+            }
+
+            // --- ATTENDANCE COMMANDS ---
+
             if (['in', 'out', 'break', 'continue'].includes(commandName)) {
                 const guildConfig: IGuildConfig | null = await GuildConfig.findOne({ guildId });
                 if (!guildConfig) {
                     return interaction.reply({ 
                         content: "⚠️ An admin must use `/setchannel` before attendance can be recorded.", 
                         flags: [MessageFlags.Ephemeral] 
-                    });
+                     });
                 }
 
                 let requiredChannelId;
@@ -138,38 +164,69 @@ export function setupInteractionCreateEvent(client: Client) {
                     });
                 }
 
-                // Quick session check to catch "Already clocked in/out" errors privately
-                const activeSession = await Attendance.findOne({ userId: user.id, status: { $in: ['IN', 'BREAK'] } });
-                
-                if (commandName === 'in' && activeSession) {
-                    return interaction.reply({ content: "⚠️ You're already clocked in!", flags: [MessageFlags.Ephemeral] });
-                }
-                if (commandName === 'out' && !activeSession) {
-                    return interaction.reply({ content: "⚠️ You aren't clocked in yet! Type `/in` first.", flags: [MessageFlags.Ephemeral] });
-                }
-                if (commandName === 'break') {
-                    if (!activeSession) return interaction.reply({ content: "⚠️ You aren't clocked in yet!", flags: [MessageFlags.Ephemeral] });
-                    if (activeSession.status === 'BREAK') return interaction.reply({ content: "⚠️ You're already on break!", flags: [MessageFlags.Ephemeral] });
-                }
-                if (commandName === 'continue') {
-                    if (!activeSession) return interaction.reply({ content: "⚠️ You aren't clocked in yet!", flags: [MessageFlags.Ephemeral] });
-                    if (activeSession.status === 'IN') return interaction.reply({ content: "⚠️ You aren't on break!", flags: [MessageFlags.Ephemeral] });
+                // --- PRE-FLIGHT SESSION CHECKS (EPHEMERAL ALERTS) ---
+                const activeSession = await Attendance.findOne({ userId: user.id, guildId, status: { $in: ['IN', 'BREAK'] } });
+                const globalSession = await Attendance.findOne({ userId: user.id, status: { $in: ['IN', 'BREAK'] } });
+
+                if (commandName === 'in') {
+                    if (activeSession) {
+                        return interaction.reply({ content: "⚠️ You're already clocked in on this server!", flags: [MessageFlags.Ephemeral] });
+                    }
+                    if (globalSession) {
+                        const otherGuild = client.guilds.cache.get(globalSession.guildId as string);
+                        const guildName = otherGuild ? `**${otherGuild.name}**` : "another server";
+                        return interaction.reply({ 
+                            content: `⚠️ You are currently clocked in on ${guildName}. Please clock out there first.`, 
+                            flags: [MessageFlags.Ephemeral] 
+                        });
+                    }
                 }
 
-                // All basic checks passed, now defer as public for the actual database update
+                if (commandName === 'out' && !activeSession) {
+                    if (globalSession) {
+                        const otherGuild = client.guilds.cache.get(globalSession.guildId as string);
+                        const guildName = otherGuild ? `**${otherGuild.name}**` : "another server";
+                        return interaction.reply({ 
+                            content: `⚠️ You are clocked in on ${guildName}, not here. Please clock out on that server.`, 
+                            flags: [MessageFlags.Ephemeral] 
+                        });
+                    }
+                    return interaction.reply({ content: "⚠️ You aren't clocked in yet! Type `/in` first.", flags: [MessageFlags.Ephemeral] });
+                }
+
+                if (['break', 'continue'].includes(commandName)) {
+                    if (!activeSession) {
+                        if (globalSession) {
+                            const otherGuild = client.guilds.cache.get(globalSession.guildId as string);
+                            const guildName = otherGuild ? `**${otherGuild.name}**` : "another server";
+                            return interaction.reply({ 
+                                content: `⚠️ Your active session is on ${guildName}. Please manage your breaks there.`, 
+                                flags: [MessageFlags.Ephemeral] 
+                            });
+                        }
+                        return interaction.reply({ content: "⚠️ You aren't clocked in yet!", flags: [MessageFlags.Ephemeral] });
+                    }
+                    if (commandName === 'break' && activeSession.status === 'BREAK') {
+                        return interaction.reply({ content: "⚠️ You're already on break!", flags: [MessageFlags.Ephemeral] });
+                    }
+                    if (commandName === 'continue' && activeSession.status === 'IN') {
+                        return interaction.reply({ content: "⚠️ You aren't on break!", flags: [MessageFlags.Ephemeral] });
+                    }
+                }
+
+                // All basic checks passed, now defer publicly for the success message
                 await interaction.deferReply(); 
 
                 let result;
                 if (commandName === 'in') result = await handleClockIn(user.id, guildId);
-                else if (commandName === 'out') result = await handleClockOut(user.id);
-                else if (commandName === 'break') result = await handleBreakStart(user.id);
-                else if (commandName === 'continue') result = await handleBreakEnd(user.id);
+                else if (commandName === 'out') result = await handleClockOut(user.id, guildId);
+                else if (commandName === 'break') result = await handleBreakStart(user.id, guildId);
+                else if (commandName === 'continue') result = await handleBreakEnd(user.id, guildId);
                 
                 if (result) {
                     await interaction.editReply({ content: result.message });
                 }
             }
-
 
             if (commandName === 'test-digest') {
                 await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
@@ -213,7 +270,6 @@ export function setupInteractionCreateEvent(client: Client) {
                 }
             }
         } catch (error) {
-
             const cmdName = interaction.isChatInputCommand() ? interaction.commandName : 'unknown';
             console.error(`❌ Interaction Error (${cmdName}):`, error);
             
@@ -234,6 +290,3 @@ export function setupInteractionCreateEvent(client: Client) {
         }
     });
 }
-
-
-

@@ -56,7 +56,14 @@ export const commands = [
                 .setRequired(true))
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
     new SlashCommandBuilder()
-
+        .setName('set-auto-out')
+        .setDescription('Set the time for automatic clock-out (24h format HH:mm)')
+        .addStringOption(option =>
+            option.setName('time')
+                .setDescription('Time in 24h format (e.g., 22:00 or 23:59)')
+                .setRequired(true))
+        .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+    new SlashCommandBuilder()
         .setName('test-digest')
         .setDescription('Force a test of the daily digest CSV report')
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
@@ -65,14 +72,28 @@ export const commands = [
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN as string);
 
-export const registerCommands = async () => {
+export const registerCommands = async (guildIds?: string[]) => {
     try {
         console.log('Started refreshing application (/) commands.');
         if (!process.env.CLIENT_ID) throw new Error('CLIENT_ID is missing from .env file');
+        
+        // Register Global Commands
         await rest.put(
             Routes.applicationCommands(process.env.CLIENT_ID),
             { body: commands },
         );
+
+        // Also register as Guild Commands for instant updates in development
+        if (guildIds && guildIds.length > 0) {
+            for (const guildId of guildIds) {
+                await rest.put(
+                    Routes.applicationGuildCommands(process.env.CLIENT_ID, guildId),
+                    { body: commands },
+                );
+                console.log(`Successfully reloaded commands for guild: ${guildId}`);
+            }
+        }
+
         console.log('Successfully reloaded application (/) commands.');
     } catch (error) {
         console.error('Error refreshing commands:', error);

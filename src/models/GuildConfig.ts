@@ -9,6 +9,7 @@ export interface IGuildConfig extends Document {
     dashboardChannelId?: string;
     dashboardMessageId?: string;
     lateAlertsChannelId?: string;
+    autoClockOutTime?: string;
 }
 
 const guildConfigSchema = new Schema<IGuildConfig>({
@@ -19,7 +20,8 @@ const guildConfigSchema = new Schema<IGuildConfig>({
     reportsChannelId: { type: String },
     dashboardChannelId: { type: String },
     dashboardMessageId: { type: String },
-    lateAlertsChannelId: { type: String }
+    lateAlertsChannelId: { type: String },
+    autoClockOutTime: { type: String, default: '23:59' }
 });
 
 export const GuildConfig = model<IGuildConfig>('GuildConfig', guildConfigSchema);
